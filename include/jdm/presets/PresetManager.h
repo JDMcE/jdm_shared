@@ -30,6 +30,11 @@ struct FactoryPreset
     juce::String tags;        // ';'-separated
     juce::String description;
     std::vector<std::pair<juce::String, float>> values;
+
+    // Session data the preset carries (child trees of the state, e.g. a
+    // kit or a mix). A tree of an inherited type given here is not
+    // inherited from the session.
+    std::vector<juce::ValueTree> trees = {};
 };
 
 // Everything product-specific about the preset ecosystem, supplied once by
@@ -446,6 +451,9 @@ private:
                 state.appendChild (param, nullptr);
             }
         }
+
+        for (const auto& t : fp.trees)
+            state.appendChild (t.createCopy(), nullptr);
 
         state.setProperty (presetNameProperty, fp.name, nullptr);
         return state;
