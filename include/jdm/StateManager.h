@@ -20,6 +20,13 @@ namespace jdm
 // once it has been quiet for a short while. Non-parameter state edits
 // (e.g. a committed MIDI Learn mapping) are flagged explicitly via
 // noteNonParameterChange().
+//
+// Host automation is not an edit: played back, it would fill the history
+// with steps nobody made. With setOnlyGesturesAreEdits (true) a parameter
+// change counts only inside a change gesture (a control being dragged, here
+// or in the host's own UI); automation and other ungestured sets don't, but
+// they are taken into the slot's current state once quiet, so the next undo
+// takes back the edit and not the automation as well.
 class StateManager : private juce::AudioProcessorListener,
                      private juce::Timer
 {
@@ -44,6 +51,9 @@ public:
     // preset load) so the owner can refresh caches built from the tree
     // (MIDI CC map etc.).
     std::function<void()> onStateReapplied;
+
+    // Off by default (every parameter change is an edit, as before).
+    void setOnlyGesturesAreEdits (bool on) { onlyGestures.store (on); }
 
     // Undo/redo (active slot) --------------------------------------------------
 
@@ -82,7 +92,12 @@ public:
     void commitPendingChanges()
     {
         if (! dirty.exchange (false))
+        {
+            if (unrecorded.exchange (false))
+                slots[active].current = apvts.copyState(); // silent: automation isn't an edit
             return;
+        }
+        unrecorded = false;
 
         auto& slot = slots[active];
         auto now = apvts.copyState();
@@ -245,16 +260,29 @@ private:
     {
         if (applying)
             return;
+        if (onlyGestures.load() && openGestures.load() <= 0)
+        {
+            unrecorded.store (true);
+            return;
+        }
         lastChangeMs.store (juce::Time::getMillisecondCounter());
         dirty.store (true);
     }
 
     void audioProcessorChanged (juce::AudioProcessor*, const ChangeDetails&) override {}
 
+    void audioProcessorParameterChangeGestureBegin (juce::AudioProcessor*, int) override { ++openGestures; }
+
+    void audioProcessorParameterChangeGestureEnd (juce::AudioProcessor*, int) override
+    {
+        if (--openGestures < 0)
+            openGestures.store (0); // an end without its begin
+    }
+
     void timerCallback() override
     {
-        if (dirty.load()
-            && juce::Time::getMillisecondCounter() - lastChangeMs.load() > 250)
+        if ((dirty.load() && juce::Time::getMillisecondCounter() - lastChangeMs.load() > 250)
+            || (! dirty.load() && unrecorded.load()))
             commitPendingChanges();
     }
 
@@ -266,6 +294,9 @@ private:
 
     std::atomic<bool> dirty { false };
     std::atomic<juce::uint32> lastChangeMs { 0 };
+    std::atomic<bool> onlyGestures { false };
+    std::atomic<int> openGestures { 0 };
+    std::atomic<bool> unrecorded { false };   // ungestured changes since the last snapshot
     bool applying = false; // message thread only
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StateManager)
