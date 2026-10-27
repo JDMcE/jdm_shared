@@ -30,6 +30,11 @@ struct FactoryPreset
     juce::String tags;        // ';'-separated
     juce::String description;
     std::vector<std::pair<juce::String, float>> values;
+
+    // Session data the preset carries (child trees of the state, e.g. a
+    // kit or a mix). A tree of an inherited type given here is not
+    // inherited from the session.
+    std::vector<juce::ValueTree> trees = {};
 };
 
 // Everything product-specific about the preset ecosystem, supplied once by
@@ -50,6 +55,11 @@ struct PresetProductConfig
     // Per-user/session UI preferences that ride in the state tree: preserved
     // from the session on load, stripped on save (Equinox: GPU/hints/range).
     juce::StringArray sessionProperties;
+
+    // Child trees that are the session's, not a sound's: kept from the session
+    // on every load (whatever the preset carries), stripped on save (Nova: the
+    // song track, "SONG").
+    juce::StringArray sessionChildTrees;
 
     juce::String factoryAuthor { "Equinox Audio" };
     std::vector<FactoryPreset> factory;
@@ -227,6 +237,15 @@ public:
                 state.setProperty (prop, apvts.state.getProperty (prop), nullptr);
         }
 
+        for (const auto& name : productConfig.sessionChildTrees)
+        {
+            const juce::Identifier type (name);
+            if (auto own = state.getChildWithName (type); own.isValid())
+                state.removeChild (own, nullptr);
+            if (auto current = apvts.state.getChildWithName (type); current.isValid())
+                state.appendChild (current.createCopy(), nullptr);
+        }
+
         applyState (state);
         return true;
     }
@@ -270,6 +289,9 @@ public:
         auto state = apvts.copyState();
         for (const auto& propName : productConfig.sessionProperties)
             state.removeProperty (juce::Identifier (propName), nullptr);
+        for (const auto& name : productConfig.sessionChildTrees)
+            if (auto child = state.getChildWithName (juce::Identifier (name)); child.isValid())
+                state.removeChild (child, nullptr);
 
         auto stateXml = state.createXml();
         if (stateXml == nullptr)
@@ -446,6 +468,9 @@ private:
                 state.appendChild (param, nullptr);
             }
         }
+
+        for (const auto& t : fp.trees)
+            state.appendChild (t.createCopy(), nullptr);
 
         state.setProperty (presetNameProperty, fp.name, nullptr);
         return state;
